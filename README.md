@@ -1,48 +1,53 @@
-# Phase 4 - Full Stack Application
+# Phase 6 - Full Stack App with CI/CD
 
 ## Features
-- ✅ React frontend dashboard
-- ✅ User authentication (login/register)
-- ✅ JWT token management
-- ✅ CRUD operations for items
-- ✅ Protected routes
+- ✅ GitHub Actions CI/CD pipeline
+- ✅ Automated testing on push
+- ✅ Docker image building and pushing
+- ✅ Production-ready Dockerfiles
+- ✅ Interactive Swagger API docs
+- ✅ React frontend
+- ✅ JWT authentication
 - ✅ PostgreSQL database
-- ✅ Docker containerization
-- ✅ Responsive design
 
 ## Quick Start
 
-### Run Everything with Docker
+### Local Development
 ```bash
 docker-compose up --build
 ```
 
 - **Frontend**: http://localhost:3000
 - **Backend API**: http://localhost:8000
-- **Database**: localhost:5432
+- **Swagger Docs**: http://localhost:8000/docs
 
-### Run Separately
-
-**Backend:**
+### Production Build
 ```bash
-docker-compose up app db
+docker-compose -f docker-compose.prod.yml up -d
 ```
 
-**Frontend (in separate terminal):**
-```bash
-cd frontend
-npm start
-```
+## CI/CD Pipeline
 
-## User Flow
-1. Visit http://localhost:3000
-2. Register a new account
-3. Login with credentials
-4. Create, view, edit, and delete items
-5. View profile and stats
+### What it does:
+1. **On every push/PR:**
+   - ✅ Runs backend tests with PostgreSQL
+   - ✅ Builds frontend and checks for errors
+   - ✅ Builds Docker images
+   - ✅ Runs code quality checks (flake8, black)
 
-## Tech Stack
-- **Frontend**: React 18, React Router, Axios
-- **Backend**: Flask, SQLAlchemy, JWT
-- **Database**: PostgreSQL
-- **Containerization**: Docker, Docker Compose
+2. **On merge to main:**
+   - ✅ Builds production Docker images
+   - ✅ Pushes to Docker Hub
+   - ✅ Ready for deployment
+
+### Setup GitHub Secrets:
+In your GitHub repo → Settings → Secrets and variables → Actions:
+
+- `DOCKER_USERNAME`: Your Docker Hub username
+- `DOCKER_PASSWORD`: Your Docker Hub access token
+
+### Workflow Status:
+- **CI**: `.github/workflows/ci.yml`
+- **CD**: `.github/workflows/cd.yml`
+
+## Project Structure
