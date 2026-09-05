@@ -39,7 +39,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
+      - name: Show installed versions
+        run: |
+          pip freeze | grep -E "Flask|JWT|RESTX|Werkzeug|PyJWT"
       - name: Run tests
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
