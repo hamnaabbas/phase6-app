@@ -35,7 +35,7 @@ app = Flask(__name__)
 # Allow React frontend running on localhost:3000
 CORS(
     app,
-    resources={r"/api/*": {"origins": "http://localhost:3000"}},
+    resources={r"/api/*": {"origins": "*"}},
     supports_credentials=True,
 )
 
