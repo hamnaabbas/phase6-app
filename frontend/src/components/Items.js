@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
-const API_URL = 'http://localhost:8000';
+const API_URL = 'https://web-production-b3b40.up.railway.app';
 
 function Items() {
   const [items, setItems] = useState([]);
