@@ -9,7 +9,7 @@ RUN npm ci
 COPY . .
 
 # Set API URL for production
-ENV REACT_APP_API_URL=https://your-backend-url.railway.app
+ENV REACT_APP_API_URL=https://web-production-db7a44.up.railway.app
 
 RUN npm run build
 
