@@ -12,7 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# ✅ FIXED LINE (THIS WAS WRONG BEFORE)
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /backend
 
 USER appuser
