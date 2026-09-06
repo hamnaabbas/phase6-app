@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate, Navigate } from 'react-router-dom';
 import axios from 'axios';
 
-const API_URL = 'http://localhost:8000';
+const API_URL = 'https://web-production-b3b40.up.railway.app';
 
 function Register({ isAuthenticated }) {
   const [username, setUsername] = useState('');
