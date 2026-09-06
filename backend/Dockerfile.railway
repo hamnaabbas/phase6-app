@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-WORKDIR /backend/src
+WORKDIR /backend
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -18,4 +18,4 @@ USER appuser
 
 EXPOSE 8000
 
-CMD sh -c "PYTHONPATH=/backend/src gunicorn app:app --bind 0.0.0.0:${PORT:-8000}"
+CMD sh -c "gunicorn src.app:app --bind 0.0.0.0:${PORT:-8000}"
