@@ -1,122 +1,63 @@
 import os
+import secrets
 from datetime import datetime, timedelta
-
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask import Flask, request, url_for, render_template_string
 from flask_sqlalchemy import SQLAlchemy
-from flask_jwt_extended import (
-    JWTManager,
-    create_access_token,
-    jwt_required,
-    get_jwt_identity,
-)
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_restx import Api, Resource, fields, Namespace
+from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 
-# ============================================================
-# LOAD ENVIRONMENT VARIABLES
-# ============================================================
-
+# Load environment variables
 load_dotenv()
-
-
-# ============================================================
-# FLASK APP
-# ============================================================
 
 app = Flask(__name__)
 
+# Configuration
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key')
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'dev-jwt-secret')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///dev.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
+app.config['RESTX_MASK_SWAGGER'] = False
 
-# ============================================================
-# CORS
-# ============================================================
+# Email configuration
+app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.sendgrid.net')
+app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 587))
+app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'true').lower() == 'true'
+app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME', 'apikey')
+app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD', '')
+app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', 'noreply@example.com')
+app.config['FRONTEND_URL'] = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 
-# Allow React frontend running on localhost:3000
-CORS(
-    app,
-    resources={r"/api/*": {"origins": "*"}},
-    supports_credentials=True,
-)
-
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-key")
-
-app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "dev-jwt-secret")
-
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///dev.db")
-
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-
-# JWT expires after 1 hour
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
-
-# Disable Flask-RESTX response masking
-app.config["RESTX_MASK_SWAGGER"] = False
-
-
-# ============================================================
-# INITIALIZE EXTENSIONS
-# ============================================================
-
+# Initialize extensions
 db = SQLAlchemy(app)
-
 jwt = JWTManager(app)
+mail = Mail(app)
 
-
-# ============================================================
-# SWAGGER / RESTX CONFIGURATION
-# ============================================================
-
-authorizations = {
-    "Bearer Auth": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "Authorization",
-        "description": (
-            "Enter your JWT token using this format: " "Bearer YOUR_ACCESS_TOKEN"
-        ),
-    }
-}
-
-
+# Create API with Swagger
 api = Api(
     app,
-    version="1.0.0",
-    title="Phase 5 REST API",
-    description=(
-        "Complete REST API with JWT authentication, "
-        "user registration, login, profile and CRUD operations."
-    ),
-    doc="/docs",
-    authorizations=authorizations,
-    security="Bearer Auth",
+    version='1.0.0',
+    title='Phase 8 API',
+    description='Complete REST API with email verification and password reset',
+    doc='/docs',
+    contact='your.email@example.com',
+    security='Bearer Auth'
 )
 
-
-# ============================================================
-# DATABASE MODELS
-# ============================================================
-
-
+# Models
 class User(db.Model):
-
-    __tablename__ = "users"
-
     id = db.Column(db.Integer, primary_key=True)
-
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
-
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
-
     password_hash = db.Column(db.String(255), nullable=False)
-
+    email_verified = db.Column(db.Boolean, default=False)
+    email_verification_token = db.Column(db.String(255), unique=True)
+    password_reset_token = db.Column(db.String(255), unique=True)
+    password_reset_expires = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
     is_active = db.Column(db.Boolean, default=True)
 
     def set_password(self, password):
@@ -125,472 +66,578 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
+    def generate_verification_token(self):
+        self.email_verification_token = secrets.token_urlsafe(32)
+        return self.email_verification_token
+
+    def generate_reset_token(self):
+        self.password_reset_token = secrets.token_urlsafe(32)
+        self.password_reset_expires = datetime.utcnow() + timedelta(hours=1)
+        return self.password_reset_token
+
     def to_dict(self):
         return {
-            "id": self.id,
-            "username": self.username,
-            "email": self.email,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "is_active": self.is_active,
+            'id': self.id,
+            'username': self.username,
+            'email': self.email,
+            'email_verified': self.email_verified,
+            'created_at': self.created_at.isoformat()
         }
-
 
 class Item(db.Model):
-
-    __tablename__ = "items"
-
     id = db.Column(db.Integer, primary_key=True)
-
     name = db.Column(db.String(100), nullable=False)
-
     description = db.Column(db.String(255))
-
-    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    owner = db.relationship("User", backref=db.backref("items", lazy=True))
+    owner = db.relationship('User', backref=db.backref('items', lazy=True))
 
     def to_dict(self):
         return {
-            "id": self.id,
-            "name": self.name,
-            "description": self.description,
-            "user_id": self.user_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'user_id': self.user_id,
+            'created_at': self.created_at.isoformat()
         }
 
+# Email templates
+def send_verification_email(user, token):
+    """Send email verification email"""
+    verification_url = f"{app.config['FRONTEND_URL']}/verify-email/{token}"
+    
+    html_body = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .button {{ 
+                display: inline-block; 
+                padding: 12px 24px; 
+                background: #3498db; 
+                color: white; 
+                text-decoration: none; 
+                border-radius: 4px;
+                margin: 20px 0;
+            }}
+            .button:hover {{ background: #2980b9; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2>Verify Your Email</h2>
+            <p>Hi {user.username},</p>
+            <p>Thanks for registering! Please verify your email address by clicking the button below:</p>
+            <a href="{verification_url}" class="button">Verify Email</a>
+            <p>Or copy and paste this link:</p>
+            <p style="word-break: break-all; color: #666;">{verification_url}</p>
+            <p>This link expires in 24 hours.</p>
+            <p>If you didn't create this account, please ignore this email.</p>
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+            <p style="color: #999; font-size: 12px;">Phase 8 App</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    msg = Message(
+        subject='Verify Your Email - Phase 8 App',
+        recipients=[user.email],
+        html=html_body
+    )
+    
+    try:
+        mail.send(msg)
+        return True
+    except Exception as e:
+        print(f"Failed to send verification email: {e}")
+        return False
 
-# ============================================================
-# CREATE DATABASE TABLES
-# ============================================================
+def send_welcome_email(user):
+    """Send welcome email after verification"""
+    dashboard_url = f"{app.config['FRONTEND_URL']}/dashboard"
+    
+    html_body = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .button {{ 
+                display: inline-block; 
+                padding: 12px 24px; 
+                background: #2ecc71; 
+                color: white; 
+                text-decoration: none; 
+                border-radius: 4px;
+                margin: 20px 0;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2 style="color: #2ecc71;">Welcome to Phase 8 App! 🎉</h2>
+            <p>Hi {user.username},</p>
+            <p>Your email has been verified successfully! You're all set up.</p>
+            <p>Get started by exploring your dashboard:</p>
+            <a href="{dashboard_url}" class="button">Go to Dashboard</a>
+            <p>What you can do:</p>
+            <ul>
+                <li>Create and manage your items</li>
+                <li>View your profile and stats</li>
+                <li>Access our API documentation</li>
+            </ul>
+            <p>Need help? Contact us at support@example.com</p>
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+            <p style="color: #999; font-size: 12px;">Phase 8 App</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    msg = Message(
+        subject='Welcome to Phase 8 App!',
+        recipients=[user.email],
+        html=html_body
+    )
+    
+    try:
+        mail.send(msg)
+        return True
+    except Exception as e:
+        print(f"Failed to send welcome email: {e}")
+        return False
 
+def send_password_reset_email(user, token):
+    """Send password reset email"""
+    reset_url = f"{app.config['FRONTEND_URL']}/reset-password/{token}"
+    
+    html_body = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .button {{ 
+                display: inline-block; 
+                padding: 12px 24px; 
+                background: #e74c3c; 
+                color: white; 
+                text-decoration: none; 
+                border-radius: 4px;
+                margin: 20px 0;
+            }}
+            .warning {{ 
+                background: #fff3cd; 
+                border: 1px solid #ffc107; 
+                padding: 10px; 
+                border-radius: 4px;
+                margin: 20px 0;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2 style="color: #e74c3c;">Password Reset Request</h2>
+            <p>Hi {user.username},</p>
+            <p>We received a request to reset your password. Click the button below to reset it:</p>
+            <a href="{reset_url}" class="button">Reset Password</a>
+            <p>Or copy and paste this link:</p>
+            <p style="word-break: break-all; color: #666;">{reset_url}</p>
+            <div class="warning">
+                <strong>⚠️ Important:</strong> This link expires in 1 hour for security reasons.
+            </div>
+            <p>If you didn't request this, you can safely ignore this email. Your password will remain unchanged.</p>
+            <p>For security, don't share this link with anyone.</p>
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+            <p style="color: #999; font-size: 12px;">Phase 8 App</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    msg = Message(
+        subject='Password Reset Request - Phase 8 App',
+        recipients=[user.email],
+        html=html_body
+    )
+    
+    try:
+        mail.send(msg)
+        return True
+    except Exception as e:
+        print(f"Failed to send password reset email: {e}")
+        return False
+
+# Create tables
 with app.app_context():
     db.create_all()
 
+# Define API models for Swagger
+auth_model = api.model('Auth', {
+    'username': fields.String(required=True, description='Username'),
+    'password': fields.String(required=True, description='Password')
+})
 
-# ============================================================
-# SWAGGER MODELS
-# ============================================================
+register_model = api.model('Register', {
+    'username': fields.String(required=True, description='Username'),
+    'email': fields.String(required=True, description='Email address'),
+    'password': fields.String(required=True, description='Password')
+})
 
-auth_model = api.model(
-    "Login",
-    {
-        "username": fields.String(required=True, description="Username"),
-        "password": fields.String(required=True, description="Password"),
-    },
-)
+reset_password_model = api.model('ResetPassword', {
+    'token': fields.String(required=True, description='Reset token from email'),
+    'password': fields.String(required=True, description='New password')
+})
 
+item_model = api.model('Item', {
+    'name': fields.String(required=True, description='Item name'),
+    'description': fields.String(description='Item description')
+})
 
-register_model = api.model(
-    "Register",
-    {
-        "username": fields.String(required=True, description="Username"),
-        "email": fields.String(required=True, description="Email address"),
-        "password": fields.String(required=True, description="Password"),
-    },
-)
+item_response_model = api.model('ItemResponse', {
+    'id': fields.Integer(description='Item ID'),
+    'name': fields.String(description='Item name'),
+    'description': fields.String(description='Item description'),
+    'user_id': fields.Integer(description='Owner user ID'),
+    'created_at': fields.DateTime(description='Creation timestamp')
+})
 
+user_response_model = api.model('UserResponse', {
+    'id': fields.Integer(description='User ID'),
+    'username': fields.String(description='Username'),
+    'email': fields.String(description='Email address'),
+    'email_verified': fields.Boolean(description='Email verification status'),
+    'created_at': fields.DateTime(description='Registration timestamp')
+})
 
-item_model = api.model(
-    "Item",
-    {
-        "name": fields.String(required=True, description="Item name"),
-        "description": fields.String(required=False, description="Item description"),
-    },
-)
+# Create namespaces
+auth_ns = Namespace('Authentication', description='Authentication operations')
+api.add_namespace(auth_ns, path='/api')
 
+items_ns = Namespace('Items', description='Item operations')
+api.add_namespace(items_ns, path='/api')
 
-item_response_model = api.model(
-    "ItemResponse",
-    {
-        "id": fields.Integer(description="Item ID"),
-        "name": fields.String(description="Item name"),
-        "description": fields.String(description="Item description"),
-        "user_id": fields.Integer(description="Owner user ID"),
-        "created_at": fields.DateTime(description="Creation timestamp"),
-    },
-)
+profile_ns = Namespace('Profile', description='User profile operations')
+api.add_namespace(profile_ns, path='/api')
 
+email_ns = Namespace('Email', description='Email verification and password reset')
+api.add_namespace(email_ns, path='/api')
 
-user_response_model = api.model(
-    "UserResponse",
-    {
-        "id": fields.Integer(description="User ID"),
-        "username": fields.String(description="Username"),
-        "email": fields.String(description="Email address"),
-        "created_at": fields.DateTime(description="Registration timestamp"),
-        "is_active": fields.Boolean(description="Whether the account is active"),
-    },
-)
-
-
-profile_response_model = api.model(
-    "ProfileResponse",
-    {
-        "user": fields.Nested(user_response_model),
-        "item_count": fields.Integer(description="Number of items owned by the user"),
-    },
-)
-
-
-login_response_model = api.model(
-    "LoginResponse",
-    {
-        "message": fields.String(),
-        "access_token": fields.String(),
-        "token_type": fields.String(),
-        "user": fields.Nested(user_response_model),
-    },
-)
-
-
-# ============================================================
-# NAMESPACES
-# ============================================================
-
-auth_ns = Namespace("Authentication", description="User registration and login")
-
-api.add_namespace(auth_ns, path="/api")
-
-
-items_ns = Namespace("Items", description="CRUD operations for user items")
-
-api.add_namespace(items_ns, path="/api")
-
-
-profile_ns = Namespace("Profile", description="Authenticated user profile")
-
-api.add_namespace(profile_ns, path="/api")
-
-
-# ============================================================
-# HOME
-# ============================================================
-
-
-@app.route("/")
-def home():
-
-    return jsonify(
-        {
-            "message": "Welcome to Phase 5 API",
-            "status": "running",
-            "version": "5.0.0",
-            "database": "connected",
-            "authentication": "JWT enabled",
-            "swagger": "/docs",
-        }
-    )
-
-
-# ============================================================
-# HEALTH CHECK
-# ============================================================
-
-
-@app.route("/health")
-def health():
-
-    return jsonify({"status": "healthy"})
-
-
-# ============================================================
-# REGISTER
-# ============================================================
-
-
-@auth_ns.route("/register")
+# Authentication endpoints
+@auth_ns.route('/register')
 class Register(Resource):
-
-    @auth_ns.expect(register_model, validate=True)
-    @auth_ns.response(201, "User registered successfully")
-    @auth_ns.response(400, "Invalid input")
-    @auth_ns.response(409, "User already exists")
+    @auth_ns.expect(register_model)
+    @auth_ns.response(201, 'User registered successfully', user_response_model)
+    @auth_ns.response(400, 'Invalid input')
+    @auth_ns.response(409, 'User already exists')
     def post(self):
-        """Register a new user"""
-
+        """Register a new user and send verification email"""
         data = request.get_json()
-
-        username = data.get("username")
-        email = data.get("email")
-        password = data.get("password")
-
-        # Validate
-        if not username or not email or not password:
-
-            return {"error": ("Username, email, and password " "are required")}, 400
-
-        # Check username
-        existing_username = User.query.filter_by(username=username).first()
-
-        if existing_username:
-
-            return {"error": "Username already exists"}, 409
-
-        # Check email
-        existing_email = User.query.filter_by(email=email).first()
-
-        if existing_email:
-
-            return {"error": "Email already registered"}, 409
-
-        # Create user
-        user = User(username=username, email=email)
-
-        user.set_password(password)
-
+        
+        if not data or not data.get('username') or not data.get('email') or not data.get('password'):
+            return {'error': 'Username, email, and password are required'}, 400
+        
+        if User.query.filter_by(username=data['username']).first():
+            return {'error': 'Username already exists'}, 409
+        
+        if User.query.filter_by(email=data['email']).first():
+            return {'error': 'Email already registered'}, 409
+        
+        user = User(username=data['username'], email=data['email'])
+        user.set_password(data['password'])
+        token = user.generate_verification_token()
+        
         db.session.add(user)
-
         db.session.commit()
-
-        return {"message": "User registered successfully", "user": user.to_dict()}, 201
-
-
-# ============================================================
-# LOGIN
-# ============================================================
-
-
-@auth_ns.route("/login")
-class Login(Resource):
-
-    @auth_ns.expect(auth_model, validate=True)
-    @auth_ns.marshal_with(login_response_model)
-    @auth_ns.response(200, "Login successful")
-    @auth_ns.response(400, "Invalid input")
-    @auth_ns.response(401, "Invalid credentials")
-    @auth_ns.response(403, "Account deactivated")
-    def post(self):
-        """Login and receive JWT access token"""
-
-        data = request.get_json()
-
-        username = data.get("username")
-        password = data.get("password")
-
-        if not username or not password:
-
-            return {"error": ("Username and password required")}, 400
-
-        # Find user
-        user = User.query.filter_by(username=username).first()
-
-        # Validate credentials
-        if not user or not user.check_password(password):
-
-            return {"error": "Invalid username or password"}, 401
-
-        # Check active account
-        if not user.is_active:
-
-            return {"error": "Account is deactivated"}, 403
-
-        # Create JWT
-        access_token = create_access_token(identity=str(user.id))
-
+        
+        # Send verification email
+        send_verification_email(user, token)
+        
         return {
-            "message": "Login successful",
-            "access_token": access_token,
-            "token_type": "Bearer",
-            "user": user.to_dict(),
-        }, 200
+            'message': 'User registered successfully. Please check your email to verify your account.',
+            'user': user.to_dict()
+        }, 201
 
+@auth_ns.route('/login')
+class Login(Resource):
+    @auth_ns.expect(auth_model)
+    @auth_ns.response(200, 'Login successful')
+    @auth_ns.response(400, 'Invalid input')
+    @auth_ns.response(401, 'Invalid credentials')
+    @auth_ns.response(403, 'Email not verified or account deactivated')
+    def post(self):
+        """Login and get JWT access token"""
+        data = request.get_json()
+        
+        if not data or not data.get('username') or not data.get('password'):
+            return {'error': 'Username and password required'}, 400
+        
+        user = User.query.filter_by(username=data['username']).first()
+        
+        if not user or not user.check_password(data['password']):
+            return {'error': 'Invalid username or password'}, 401
+        
+        if not user.email_verified:
+            return {'error': 'Please verify your email before logging in'}, 403
+        
+        if not user.is_active:
+            return {'error': 'Account is deactivated'}, 403
+        
+        access_token = create_access_token(identity=user.id)
+        
+        return {
+            'message': 'Login successful',
+            'access_token': access_token,
+            'token_type': 'Bearer',
+            'user': user.to_dict()
+        }
 
-# ============================================================
-# GET ALL ITEMS
-# ============================================================
+# Email verification endpoints
+@email_ns.route('/verify-email/<token>')
+class VerifyEmail(Resource):
+    @email_ns.doc('verify_email')
+    @email_ns.response(200, 'Email verified successfully')
+    @email_ns.response(400, 'Invalid or expired token')
+    def get(self, token):
+        """Verify email address with token from email"""
+        user = User.query.filter_by(email_verification_token=token).first()
+        
+        if not user:
+            return {'error': 'Invalid verification token'}, 400
+        
+        # Check if token is expired (24 hours)
+        if datetime.utcnow() - user.created_at > timedelta(hours=24):
+            return {'error': 'Verification token has expired'}, 400
+        
+        user.email_verified = True
+        user.email_verification_token = None
+        db.session.commit()
+        
+        # Send welcome email
+        send_welcome_email(user)
+        
+        return {'message': 'Email verified successfully! You can now login.'}
 
+@email_ns.route('/resend-verification')
+class ResendVerification(Resource):
+    @email_ns.expect(api.model('ResendVerification', {
+        'email': fields.String(required=True, description='Email address')
+    }))
+    @email_ns.response(200, 'Verification email sent')
+    @email_ns.response(404, 'User not found')
+    def post(self):
+        """Resend verification email"""
+        data = request.get_json()
+        
+        if not data or not data.get('email'):
+            return {'error': 'Email is required'}, 400
+        
+        user = User.query.filter_by(email=data['email']).first()
+        
+        if not user:
+            return {'error': 'User not found'}, 404
+        
+        if user.email_verified:
+            return {'error': 'Email already verified'}, 400
+        
+        token = user.generate_verification_token()
+        db.session.commit()
+        
+        send_verification_email(user, token)
+        
+        return {'message': 'Verification email sent. Please check your inbox.'}
 
-@items_ns.route("/items")
+# Password reset endpoints
+@email_ns.route('/forgot-password')
+class ForgotPassword(Resource):
+    @email_ns.expect(api.model('ForgotPassword', {
+        'email': fields.String(required=True, description='Email address')
+    }))
+    @email_ns.response(200, 'Password reset email sent')
+    @email_ns.response(404, 'User not found')
+    def post(self):
+        """Request password reset email"""
+        data = request.get_json()
+        
+        if not data or not data.get('email'):
+            return {'error': 'Email is required'}, 400
+        
+        user = User.query.filter_by(email=data['email']).first()
+        
+        if not user:
+            # Don't reveal if email exists for security
+            return {'message': 'If the email exists, a password reset link has been sent.'}
+        
+        token = user.generate_reset_token()
+        db.session.commit()
+        
+        send_password_reset_email(user, token)
+        
+        return {'message': 'If the email exists, a password reset link has been sent.'}
+
+@email_ns.route('/reset-password')
+class ResetPassword(Resource):
+    @email_ns.expect(reset_password_model)
+    @email_ns.response(200, 'Password reset successful')
+    @email_ns.response(400, 'Invalid or expired token')
+    def post(self):
+        """Reset password with token from email"""
+        data = request.get_json()
+        
+        if not data or not data.get('token') or not data.get('password'):
+            return {'error': 'Token and new password are required'}, 400
+        
+        if len(data['password']) < 6:
+            return {'error': 'Password must be at least 6 characters'}, 400
+        
+        user = User.query.filter_by(password_reset_token=data['token']).first()
+        
+        if not user:
+            return {'error': 'Invalid reset token'}, 400
+        
+        # Check if token is expired
+        if not user.password_reset_expires or datetime.utcnow() > user.password_reset_expires:
+            return {'error': 'Reset token has expired'}, 400
+        
+        user.set_password(data['password'])
+        user.password_reset_token = None
+        user.password_reset_expires = None
+        db.session.commit()
+        
+        return {'message': 'Password reset successful. You can now login with your new password.'}
+
+# Items endpoints
+@items_ns.route('/items')
 class ItemsList(Resource):
-
-    @items_ns.doc(security="Bearer Auth")
+    @items_ns.doc('list_items')
     @items_ns.marshal_list_with(item_response_model)
-    @items_ns.response(200, "Items retrieved successfully")
-    @items_ns.response(401, "Authentication required")
+    @items_ns.response(200, 'Success')
+    @items_ns.response(401, 'Token required')
+    @items_ns.doc(security='Bearer')
     @jwt_required()
     def get(self):
-        """Get all items belonging to the logged-in user"""
-
+        """Get all items for the authenticated user"""
         current_user_id = get_jwt_identity()
+        items = Item.query.filter_by(user_id=current_user_id).all()
+        return [item.to_dict() for item in items]
 
-        items = Item.query.filter_by(user_id=int(current_user_id)).all()
-
-        return [item.to_dict() for item in items], 200
-
-    @items_ns.doc(security="Bearer Auth")
-    @items_ns.expect(item_model, validate=True)
+    @items_ns.doc('create_item')
+    @items_ns.expect(item_model)
     @items_ns.marshal_with(item_response_model, code=201)
-    @items_ns.response(201, "Item created successfully")
-    @items_ns.response(400, "Invalid input")
-    @items_ns.response(401, "Authentication required")
+    @items_ns.response(201, 'Item created successfully')
+    @items_ns.response(400, 'Invalid input')
+    @items_ns.response(401, 'Token required')
+    @items_ns.doc(security='Bearer')
     @jwt_required()
     def post(self):
         """Create a new item"""
-
         current_user_id = get_jwt_identity()
-
         data = request.get_json()
-
-        name = data.get("name")
-        description = data.get("description", "")
-
-        if not name:
-
-            return {"error": "Item name is required"}, 400
-
-        item = Item(name=name, description=description, user_id=int(current_user_id))
-
+        
+        if not data or not data.get('name'):
+            return {'error': 'Item name is required'}, 400
+        
+        item = Item(name=data['name'], description=data.get('description', ''), user_id=current_user_id)
         db.session.add(item)
-
         db.session.commit()
-
+        
         return item.to_dict(), 201
 
-
-# ============================================================
-# SINGLE ITEM
-# ============================================================
-
-
-@items_ns.route("/items/<int:id>")
-@items_ns.param("id", "The item ID")
+@items_ns.route('/items/<int:id>')
+@items_ns.param('id', 'The item ID')
+@items_ns.response(404, 'Item not found')
 class ItemResource(Resource):
-
-    @items_ns.doc(security="Bearer Auth")
+    @items_ns.doc('get_item')
     @items_ns.marshal_with(item_response_model)
-    @items_ns.response(200, "Item retrieved successfully")
-    @items_ns.response(401, "Authentication required")
-    @items_ns.response(404, "Item not found")
+    @items_ns.response(200, 'Success')
+    @items_ns.response(401, 'Token required')
+    @items_ns.doc(security='Bearer')
     @jwt_required()
     def get(self, id):
-        """Get a specific item"""
-
+        """Get a specific item by ID"""
         current_user_id = get_jwt_identity()
+        item = Item.query.filter_by(id=id, user_id=current_user_id).first_or_404()
+        return item.to_dict()
 
-        item = Item.query.filter_by(id=id, user_id=int(current_user_id)).first()
-
-        if not item:
-
-            return {"error": "Item not found"}, 404
-
-        return item.to_dict(), 200
-
-    @items_ns.doc(security="Bearer Auth")
+    @items_ns.doc('update_item')
     @items_ns.expect(item_model)
     @items_ns.marshal_with(item_response_model)
-    @items_ns.response(200, "Item updated successfully")
-    @items_ns.response(401, "Authentication required")
-    @items_ns.response(404, "Item not found")
+    @items_ns.response(200, 'Item updated successfully')
+    @items_ns.response(401, 'Token required')
+    @items_ns.response(404, 'Item not found')
+    @items_ns.doc(security='Bearer')
     @jwt_required()
     def put(self, id):
         """Update an existing item"""
-
         current_user_id = get_jwt_identity()
-
-        item = Item.query.filter_by(id=id, user_id=int(current_user_id)).first()
-
-        if not item:
-
-            return {"error": "Item not found"}, 404
-
+        item = Item.query.filter_by(id=id, user_id=current_user_id).first_or_404()
+        
         data = request.get_json()
-
         if data:
-
-            if data.get("name") is not None:
-
-                item.name = data.get("name")
-
-            if data.get("description") is not None:
-
-                item.description = data.get("description")
-
+            item.name = data.get('name', item.name)
+            item.description = data.get('description', item.description)
+        
         db.session.commit()
+        return item.to_dict()
 
-        return item.to_dict(), 200
-
-    @items_ns.doc(security="Bearer Auth")
-    @items_ns.response(200, "Item deleted successfully")
-    @items_ns.response(401, "Authentication required")
-    @items_ns.response(404, "Item not found")
+    @items_ns.doc('delete_item')
+    @items_ns.response(200, 'Item deleted successfully')
+    @items_ns.response(401, 'Token required')
+    @items_ns.response(404, 'Item not found')
+    @items_ns.doc(security='Bearer')
     @jwt_required()
     def delete(self, id):
         """Delete an item"""
-
         current_user_id = get_jwt_identity()
-
-        item = Item.query.filter_by(id=id, user_id=int(current_user_id)).first()
-
-        if not item:
-
-            return {"error": "Item not found"}, 404
-
+        item = Item.query.filter_by(id=id, user_id=current_user_id).first_or_404()
+        
         db.session.delete(item)
-
         db.session.commit()
+        return {'message': 'Item deleted'}
 
-        return {"message": "Item deleted successfully"}, 200
-
-
-# ============================================================
-# PROFILE
-# ============================================================
-
-
-@profile_ns.route("/profile")
+# Profile endpoint
+@profile_ns.route('/profile')
 class Profile(Resource):
-
-    @profile_ns.doc(security="Bearer Auth")
-    @profile_ns.marshal_with(profile_response_model)
-    @profile_ns.response(200, "Profile retrieved successfully")
-    @profile_ns.response(401, "Authentication required")
-    @profile_ns.response(404, "User not found")
+    @profile_ns.doc('get_profile')
+    @profile_ns.marshal_with(api.model('ProfileResponse', {
+        'user': fields.Nested(user_response_model),
+        'item_count': fields.Integer(description='Total items owned by user')
+    }))
+    @profile_ns.response(200, 'Success')
+    @profile_ns.response(401, 'Token required')
+    @profile_ns.doc(security='Bearer')
     @jwt_required()
     def get(self):
         """Get authenticated user's profile"""
-
         current_user_id = get_jwt_identity()
+        user = User.query.get_or_404(current_user_id)
+        return {
+            'user': user.to_dict(),
+            'item_count': len(user.items)
+        }
 
-        user = User.query.get(int(current_user_id))
+# Health check
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    return {'status': 'healthy'}
 
-        if not user:
-
-            return {"error": "User not found"}, 404
-
-        return {"user": user.to_dict(), "item_count": len(user.items)}, 200
-
-
-# ============================================================
-# JWT ERROR HANDLERS
-# ============================================================
-
-
+# Error handlers
 @jwt.invalid_token_loader
 def invalid_token_loader(error):
-
-    return {"error": "Invalid token"}, 401
-
+    return {'error': 'Invalid token'}, 401
 
 @jwt.expired_token_loader
 def expired_token_loader(jwt_header, jwt_payload):
+    return {'error': 'Token has expired'}, 401
 
-    return {"error": "Token has expired"}, 401
-
-
-@jwt.unauthorized_loader
-def unauthorized_loader(error):
-
-    return {"error": "Authorization token is required"}, 401
-
-
-# ============================================================
-# APPLICATION START
-# ============================================================
-
-if __name__ == "__main__":
-
-    port = int(os.getenv("PORT", 8000))
+if __name__ == '__main__':
+    port = int(os.getenv('PORT', 8000))
     debug = os.getenv('FLASK_ENV') == 'development'
     app.run(host='0.0.0.0', port=port, debug=debug)
