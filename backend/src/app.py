@@ -1,11 +1,11 @@
 import os
 import secrets
 from datetime import datetime, timedelta
-from flask import Flask, request, url_for, render_template_string
+from flask import Flask, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_restx import Api, Resource, fields, Namespace
-from flask_mail import Mail, Message
+import resend
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 
@@ -22,19 +22,14 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
 app.config['RESTX_MASK_SWAGGER'] = False
 
-# Email configuration
-app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.sendgrid.net')
-app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 587))
-app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'true').lower() == 'true'
-app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME', 'apikey')
-app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD', '')
-app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', 'noreply@example.com')
+# Resend configuration
+resend.api_key = os.getenv('RESEND_API_KEY')
+RESEND_FROM_EMAIL = os.getenv('RESEND_FROM_EMAIL', 'onboarding@resend.dev')
 app.config['FRONTEND_URL'] = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 
 # Initialize extensions
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
-mail = Mail(app)
 
 # Create API with Swagger
 api = Api(
@@ -102,9 +97,9 @@ class Item(db.Model):
             'created_at': self.created_at.isoformat()
         }
 
-# Email templates
+# Email functions using Resend
 def send_verification_email(user, token):
-    """Send email verification email"""
+    """Send email verification email using Resend"""
     verification_url = f"{app.config['FRONTEND_URL']}/verify-email/{token}"
     
     html_body = f"""
@@ -112,52 +107,43 @@ def send_verification_email(user, token):
     <html>
     <head>
         <style>
-            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-            .button {{ 
-                display: inline-block; 
-                padding: 12px 24px; 
-                background: #3498db; 
-                color: white; 
-                text-decoration: none; 
-                border-radius: 4px;
-                margin: 20px 0;
-            }}
-            .button:hover {{ background: #2980b9; }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .button {{ display: inline-block; padding: 12px 24px; background: #0070f3; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }}
+            .button:hover {{ background: #0051cc; }}
+            .footer {{ margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 12px; }}
         </style>
     </head>
     <body>
-        <div class="container">
-            <h2>Verify Your Email</h2>
-            <p>Hi {user.username},</p>
-            <p>Thanks for registering! Please verify your email address by clicking the button below:</p>
-            <a href="{verification_url}" class="button">Verify Email</a>
-            <p>Or copy and paste this link:</p>
-            <p style="word-break: break-all; color: #666;">{verification_url}</p>
-            <p>This link expires in 24 hours.</p>
-            <p>If you didn't create this account, please ignore this email.</p>
-            <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
-            <p style="color: #999; font-size: 12px;">Phase 8 App</p>
+        <h2>Verify Your Email</h2>
+        <p>Hi {user.username},</p>
+        <p>Thanks for registering! Please verify your email address by clicking the button below:</p>
+        <a href="{verification_url}" class="button">Verify Email</a>
+        <p>Or copy and paste this link:</p>
+        <p style="word-break: break-all; color: #666; background: #f5f5f5; padding: 10px; border-radius: 4px;">{verification_url}</p>
+        <p>This link expires in 24 hours.</p>
+        <p>If you didn't create this account, please ignore this email.</p>
+        <div class="footer">
+            <p>Phase 8 App</p>
         </div>
     </body>
     </html>
     """
     
-    msg = Message(
-        subject='Verify Your Email - Phase 8 App',
-        recipients=[user.email],
-        html=html_body
-    )
-    
     try:
-        mail.send(msg)
+        email = resend.Emails.send({
+            "from": f"Phase 8 App <{RESEND_FROM_EMAIL}>",
+            "to": user.email,
+            "subject": "Verify Your Email - Phase 8 App",
+            "html": html_body
+        })
+        print(f"Verification email sent: {email}")
         return True
     except Exception as e:
         print(f"Failed to send verification email: {e}")
         return False
 
 def send_welcome_email(user):
-    """Send welcome email after verification"""
+    """Send welcome email after verification using Resend"""
     dashboard_url = f"{app.config['FRONTEND_URL']}/dashboard"
     
     html_body = f"""
@@ -165,55 +151,46 @@ def send_welcome_email(user):
     <html>
     <head>
         <style>
-            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-            .button {{ 
-                display: inline-block; 
-                padding: 12px 24px; 
-                background: #2ecc71; 
-                color: white; 
-                text-decoration: none; 
-                border-radius: 4px;
-                margin: 20px 0;
-            }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .button {{ display: inline-block; padding: 12px 24px; background: #0070f3; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }}
+            .footer {{ margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 12px; }}
         </style>
     </head>
     <body>
-        <div class="container">
-            <h2 style="color: #2ecc71;">Welcome to Phase 8 App! 🎉</h2>
-            <p>Hi {user.username},</p>
-            <p>Your email has been verified successfully! You're all set up.</p>
-            <p>Get started by exploring your dashboard:</p>
-            <a href="{dashboard_url}" class="button">Go to Dashboard</a>
-            <p>What you can do:</p>
-            <ul>
-                <li>Create and manage your items</li>
-                <li>View your profile and stats</li>
-                <li>Access our API documentation</li>
-            </ul>
-            <p>Need help? Contact us at support@example.com</p>
-            <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
-            <p style="color: #999; font-size: 12px;">Phase 8 App</p>
+        <h2 style="color: #0070f3;">Welcome to Phase 8 App! 🎉</h2>
+        <p>Hi {user.username},</p>
+        <p>Your email has been verified successfully! You're all set up.</p>
+        <p>Get started by exploring your dashboard:</p>
+        <a href="{dashboard_url}" class="button">Go to Dashboard</a>
+        <p>What you can do:</p>
+        <ul>
+            <li>Create and manage your items</li>
+            <li>View your profile and stats</li>
+            <li>Access our API documentation</li>
+        </ul>
+        <p>Need help? Contact us at support@example.com</p>
+        <div class="footer">
+            <p>Phase 8 App</p>
         </div>
     </body>
     </html>
     """
     
-    msg = Message(
-        subject='Welcome to Phase 8 App!',
-        recipients=[user.email],
-        html=html_body
-    )
-    
     try:
-        mail.send(msg)
+        email = resend.Emails.send({
+            "from": f"Phase 8 App <{RESEND_FROM_EMAIL}>",
+            "to": user.email,
+            "subject": "Welcome to Phase 8 App!",
+            "html": html_body
+        })
+        print(f"Welcome email sent: {email}")
         return True
     except Exception as e:
         print(f"Failed to send welcome email: {e}")
         return False
 
 def send_password_reset_email(user, token):
-    """Send password reset email"""
+    """Send password reset email using Resend"""
     reset_url = f"{app.config['FRONTEND_URL']}/reset-password/{token}"
     
     html_body = f"""
@@ -221,54 +198,39 @@ def send_password_reset_email(user, token):
     <html>
     <head>
         <style>
-            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-            .button {{ 
-                display: inline-block; 
-                padding: 12px 24px; 
-                background: #e74c3c; 
-                color: white; 
-                text-decoration: none; 
-                border-radius: 4px;
-                margin: 20px 0;
-            }}
-            .warning {{ 
-                background: #fff3cd; 
-                border: 1px solid #ffc107; 
-                padding: 10px; 
-                border-radius: 4px;
-                margin: 20px 0;
-            }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .button {{ display: inline-block; padding: 12px 24px; background: #e74c3c; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }}
+            .warning {{ background: #fff3cd; border: 1px solid #ffc107; padding: 10px; border-radius: 4px; margin: 20px 0; }}
+            .footer {{ margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 12px; }}
         </style>
     </head>
     <body>
-        <div class="container">
-            <h2 style="color: #e74c3c;">Password Reset Request</h2>
-            <p>Hi {user.username},</p>
-            <p>We received a request to reset your password. Click the button below to reset it:</p>
-            <a href="{reset_url}" class="button">Reset Password</a>
-            <p>Or copy and paste this link:</p>
-            <p style="word-break: break-all; color: #666;">{reset_url}</p>
-            <div class="warning">
-                <strong>⚠️ Important:</strong> This link expires in 1 hour for security reasons.
-            </div>
-            <p>If you didn't request this, you can safely ignore this email. Your password will remain unchanged.</p>
-            <p>For security, don't share this link with anyone.</p>
-            <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
-            <p style="color: #999; font-size: 12px;">Phase 8 App</p>
+        <h2 style="color: #e74c3c;">Password Reset Request</h2>
+        <p>Hi {user.username},</p>
+        <p>We received a request to reset your password. Click the button below to reset it:</p>
+        <a href="{reset_url}" class="button">Reset Password</a>
+        <p>Or copy and paste this link:</p>
+        <p style="word-break: break-all; color: #666; background: #f5f5f5; padding: 10px; border-radius: 4px;">{reset_url}</p>
+        <div class="warning">
+            <strong>⚠️ Important:</strong> This link expires in 1 hour for security reasons.
+        </div>
+        <p>If you didn't request this, you can safely ignore this email. Your password will remain unchanged.</p>
+        <p>For security, don't share this link with anyone.</p>
+        <div class="footer">
+            <p>Phase 8 App</p>
         </div>
     </body>
     </html>
     """
     
-    msg = Message(
-        subject='Password Reset Request - Phase 8 App',
-        recipients=[user.email],
-        html=html_body
-    )
-    
     try:
-        mail.send(msg)
+        email = resend.Emails.send({
+            "from": f"Phase 8 App <{RESEND_FROM_EMAIL}>",
+            "to": user.email,
+            "subject": "Password Reset Request - Phase 8 App",
+            "html": html_body
+        })
+        print(f"Password reset email sent: {email}")
         return True
     except Exception as e:
         print(f"Failed to send password reset email: {e}")
@@ -356,7 +318,7 @@ class Register(Resource):
         db.session.add(user)
         db.session.commit()
         
-        # Send verification email
+        # Send verification email using Resend
         send_verification_email(user, token)
         
         return {
@@ -419,7 +381,7 @@ class VerifyEmail(Resource):
         user.email_verification_token = None
         db.session.commit()
         
-        # Send welcome email
+        # Send welcome email using Resend
         send_welcome_email(user)
         
         return {'message': 'Email verified successfully! You can now login.'}
