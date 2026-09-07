@@ -1,16 +1,24 @@
-version: '3.8'
+version: "3.8"
 
 services:
   app:
     image: ${DOCKER_USERNAME}/phase6-backend:latest
+    container_name: phase6-backend
     ports:
       - "${PORT:-8000}:8000"
     environment:
-      - FLASK_ENV=production
-      - FLASK_DEBUG=0
-      - DATABASE_URL=${DATABASE_URL}
-      - SECRET_KEY=${SECRET_KEY}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      FLASK_ENV: production
+      FLASK_DEBUG: 0
+
+      DATABASE_URL: ${DATABASE_URL}
+      SECRET_KEY: ${SECRET_KEY}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+
+      # ✅ Email (Resend)
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL}
+      FRONTEND_URL: ${FRONTEND_URL}
+
     depends_on:
       - db
     restart: always
@@ -18,21 +26,27 @@ services:
 
   db:
     image: postgres:15-alpine
+    container_name: phase6-db
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     restart: always
 
   frontend:
     image: ${DOCKER_USERNAME}/phase6-frontend:latest
+    container_name: phase6-frontend
     ports:
       - "80:80"
     depends_on:
       - app
     restart: always
+    environment:
+      # Only frontend-safe variables
+      VITE_API_URL: ${VITE_API_URL}
+      FRONTEND_URL: ${FRONTEND_URL}
 
 volumes:
   postgres_data:
